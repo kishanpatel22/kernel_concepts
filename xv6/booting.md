@@ -1,4 +1,4 @@
-# Bootrapping the xv6 kernel 
+# Bootstrapping the xv6 kernel 
 
 ## BootLoader of xv6 kernel
 
