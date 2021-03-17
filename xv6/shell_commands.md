@@ -1,16 +1,20 @@
 ## xv6 OS task
 
-#### Installation 
+#### Installation of xv6 code
+
 ```sh
     $ git clone https://github.com/mit-pdos/xv6-public.git
     $ cd xv6-public
 ```
+
 #### Build
+
 ```sh
     $ sudo apt install qemu 
     $ make qemu
     $ make clean
 ```
+
 * Note make qemu complies and builds executable and helps to enter the qemu 
   console terminal and make clean will help you remove the .o files
   generated during compliation process
