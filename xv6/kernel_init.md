@@ -19,11 +19,16 @@
 
     + The **kernel.ld** file contains the linker script, which during
       compilation will be interpreted by linker, and links the kernel at the
-      memory location 0x80100000 (virtual address)
+      memory location 0x80100000 (virtual address after setting up pagging). 
+      
+    + However the actual physical address of entry function is 0x0010000c
+      because thats where the bootmain had copied the kernel contents in
+      actual main memory without any pagging and effectively bypassing
+      segmentation.
 
     + **Note** : there kernel is linked at location 0x80100000, the function 
-      the elf->entry() is located at 0x8010000c virtual address. (check **kernel.sym**
-      file which is formed after compilation)
+      the elf->entry() is located at 0x8010000c virtual address. 
+      (check **kernel.sym** file which is formed after compilation)
 
 
 ## ENTRY FUNCTION (Begining of kernel)
@@ -41,7 +46,9 @@
 
             ```text
                                             Linear Address (32 bits)
-               
+
+                          10 bits                   10 bits                 12 bits
+                 <-----------------------> <-----------------------> <--------------------> 
                 31                      22 21                     12 11                   0
                 |___page_directory_index__|_______page_table________|_______offset________|
                             |                         |                        |
@@ -57,7 +64,9 @@
 
             ```text
                                             Linear Address (32 bits)
-               
+
+                          10 bits                               22 bits          
+                <------------------------> <----------------------------------------------> 
                 31                      22 21                                             0
                 |___page_directory_index__|_____________________offset____________________|
                             |                                     |                       
@@ -142,12 +151,17 @@
     + **NOW FINALLY PAGING HAS STARTED**. Thus for every address issued the MMU
        will refer to the Page Directory Table pointed by CR3 regsiter.
 
-    + **COOL STUFF !**
+    + **COOL STUFF : Every address issued is just mapped to the offset**
+
         + The two entries in page directory table are both mapping to the same 
           physical memory location that is frame 0. So effectively any address 
-          issued by the CPU will get translated as 0 + offset = offset.
+          issued by the CPU will get translated as offset iteself
+
+        + Example address with 0 page number + offset = offset, but address with
+          512 page number + offset ---> translated as ---> 0 + offset = offset
+
         + Currently **OFFSET == PHYSICAL ADDRESS**
-   
+
 * **JUMPING to MAIN kernel function**
 
     + Before jumping to main function we need to shift to the kernel stack.
@@ -213,9 +227,6 @@
         ```c
             extern char end[]; // first address after kernel loaded from ELF file
             
-            #define KERNBASE 0x80000000         // First kernel virtual address
-            #define P2V(a) ((void *)(((char *) (a)) + KERNBASE))
-            
             kinit1(end, P2V(4*1024*1024)); // phys page allocator
         ```
 
@@ -225,7 +236,9 @@
 
         * **P2V is marco** which converts the phyical address to virtual address,
           basically it adds KERNBASE address value in the physicall address.
-            ```
+
+            ```c
+                #define KERNBASE 0x80000000         // First kernel virtual address
                 #define P2V(a) ((void *)(((char *) (a)) + KERNBASE))
             ```
             + **Question : why convert physical to virtual ?**
@@ -235,19 +248,36 @@
                   issued by CPU passes through the MMU PDE table. Thus now if
                   kernel want's to access any of the physical page address
                   it needs reverse the mapping of virtual to physical addresses.
+            
+                + **kernel.ld** file had linked all the kernel code at location 
+                  0x80100000, which is nothing but KERNBASE + EXTMEM. Thus
+                  every address inside the code is virtual address.
 
                 + **Work of P2V macro is just to add KERNBASE so that virtual 
-                  address issued corresponds to the 512 entry in PDE Table
-                  which is corresponds to the frame 0 in physical memory**
+                  address issued is to the corresponding 512 entry in PDE Table
+                  which is maps the virtaul memory address to physical frame 0**
+        
+        * The memory range that the kinit1 function is passed as argument is 
+            
+            |    Argument    | Hexadecimal virtual address | Hexadecimal physical address | decimal value |
+            |----------------|-----------------------------|------------------------------|---------------|
+            |    **end**     |         0x801154a8          |           0x001154a8         |   1135784     |
+            | **P2V(4 MB)**  |         0x80400000          |           0x001154a8         |   4194304     |
+        
+            Memory space of about 2.9168319702 MB ~ 3 MB is used as free frame 
+            region for initialization of the kernel's memory management data structures.
 
     + **kinit1** function definition is given below, which further calls **freerange**
+
         ```c
             void kinit1(void *vstart, void *vend) {
                 freerange(vstart, vend);
             }
         ```
+
     + **freerange** does the work of actaully freeing all the frames in between
       between the given range of addresses (vstart and vend).
+        
         ```c
             #define PGSIZE          4096    // bytes mapped by a page
                 
@@ -258,7 +288,8 @@
                     kfree(p);
                 }
         ```
-        + **Questions : what exactly is meant by freeing the frames ? who does it ?**
+
+        + **Question : what exactly is meant by freeing the frames ? who does it ?**
             + Making frames free is manipulating the OS data structures which
               maintains the free list of frames in memory.
             + kernel memory management function do this job.
@@ -268,8 +299,19 @@
                  | **kfree**    | free's any given frame    |
                  | **kalloc**   | allocates any free frame  |
 
-    
-### KVMALLOC FUNCTION (KERNEL PAGE TABLE)
+    + **Question : The page table is set up for the 4 MB pages but the free
+      frame initialization is done for 4KB pages ?**
+
+        + The 4 MB pages size entries in PDE were temporary, now we would
+          actually going to change the single level paging to two level paging.
+
+        + Remeber the **PTE_PS** bit which as set up by entrypgdir before
+          jumping to the main function will now be turned off.
+            + PTE_PS bit = 0 ---> 4 KB pages
+            + PTE_PS bit = 1 ---> 4 MB pages
+
+
+### KVMALLOC FUNCTION (KERNEL PAGE TABLE SET UP)
 
 * Note before entrying the main function of kernel, the page table set up was
   done by **entry routine**, basically setting up **entrypgdir** and settting
@@ -293,21 +335,29 @@
         }
     ```
 
-* **setupkvm** function returns the address of the kernel page directory location.
+* **setupkvm** function returns the address of kernel page directory location,
+  which is set up using the two level paging scheme i.e. PDE points to PTE
+  which further points to actual frame in memory. Setupkvm returns the starting 
+  address of the PDE table.
+
     ```c
         // Set up kernel part of a page table.
         pde_t* setupkvm(void) {
             
             pde_t *pgdir;
+
             /* structure which defines two level paging scheme for kernel   */
             struct kmap *k;
-
+            
+            /* allocate 4 KB for setting the page directory table           */
             if((pgdir = (pde_t*)kalloc()) == 0) {
                 return 0;
             }
-
+            
+            /* initialize the 4 KB chunk of memory with all values as zero  */
             memset(pgdir, 0, PGSIZE);
-
+            
+            /* loop through to setup 4 page directory entires               */
             for(k = kmap; k < &kmap[NELEM(kmap)]; k++) {
                 if(mappages(pgdir, k->virt, k->phys_end - k->phys_start,
                             (uint)k->phys_start, k->perm) < 0) {
@@ -320,9 +370,9 @@
         }
     ```
         
-    + The setupkvm function attempts to allocate free frame using 
-      kernel's kmalloc function, which returns pointer to free frame in memory
-      of 4 KB in size.
+    + The setupkvm function attempts to allocate free frame using kernel's kmalloc 
+      function, which returns pointer to free frame in memory of 4 KB which is
+      used as Page Directory Table initialized with 4 Page Directory Entries.
     
     + The memset function is used to initialize the portion of the memory
       allocated to fixed values like zero.
@@ -377,7 +427,7 @@
                 80108000 data
           ```
 
-    + Basically what are we trying to achieve by such type of memory mappings
+    + Basically what are we trying to achieve by such type of memory mappings for kernel 
         ![kmap memory mapping](./images/kernal_paging_maps.jpg) 
 
         |     region in memory      |       start    |      end      |  size        |   permissions   |
@@ -385,10 +435,10 @@
         |         I/O space         |    0           | EXTMEM        |   1 MB       |     write       |
         |   kernel code + RO data   |  EXTMEM        | EXTMEM + data |   0.03125 MB |     read        |
         |   kernel data + memory    |  EXTMEM + data | PHYSTOP       |   223 MB     |     write       |
-        |        devspace           |  EXTMEM + data | END           |   4 MB       |     write       |
+        |        devspace           |  DEVSPACE      | END           |   4 MB       |     write       |
 
-    + **mappages** function does the the work of mapping the entries to get 
-       extact page table entries in main memory.
+    + **mappages** function does the work of allocating the Page Tabel entry 
+      for any given the Page Directory Entry with address, size and permission.
 
         * Note the parameters passed to the function are 
             + **address of the start of page directory**
@@ -401,16 +451,30 @@
             static int mappages(pde_t *pgdir, void *va, uint size, uint pa, int perm) {
                 char *a, *last;
                 pte_t *pte;
-
+                
+                /* starting virtual address                                 */
                 a = (char*)PGROUNDDOWN((uint)va);
-                last = (char*)PGROUNDDOWN(((uint)va) + size - 1);
 
+                /* ending virtual addresss                                  */
+                last = (char*)PGROUNDDOWN(((uint)va) + size - 1);
+                
+                /* loop through to allocate the PTE entries in PDT          */
                 for(;;) {
+
+                    /* walkpgdir basically scans the page directory table and
+                       check if the given entry was already present or not if
+                       not then it allocate the 4 KB free memory and marks it
+                       as PTE for appropriate location in PDT.
+                     */
                     if((pte = walkpgdir(pgdir, a, 1)) == 0)
                         return -1;
+
                     if(*pte & PTE_P)
                         panic("remap");
+
+                    /* explicitly set up the permission for the PTE entry   */ 
                     *pte = pa | perm | PTE_P;
+
                     if(a == last)
                         break;
                     a += PGSIZE;
@@ -429,7 +493,7 @@
             static pte_t *walkpgdir(pde_t *pgdir, const void *va, int alloc) {
                 pde_t *pde;
                 pte_t *pgtab;
-
+                
                 pde = &pgdir[PDX(va)];
                 if(*pde & PTE_P){
                     pgtab = (pte_t*)P2V(PTE_ADDR(*pde));
@@ -446,9 +510,86 @@
                 return &pgtab[PTX(va)];
             }
         ```
+        
+        * **PDX macro** basically gets the upper 10 bits from the given address,
+          the upper 10 bits signifiy the index in the PDE table.
 
+        ```c
+            #define PDX(va)         (((uint)(va) >> PDXSHIFT) & 0x3FF)
+        ```
+        
         * **Note** : the permission set by the wakepgdir are read and write, although
           the function calling walkpgdir can modify the entry accordingly. Also
           if the alloc is set 1 implies, that the if entry not found in dir it
           will be made in the page directory table.
+    
+* **switchkvm** basically changes the CR3 register which now points to the new 
+  Page Descripter Table which is setup for the 4 KB pages using two level paging.
+
+```c
+    // Switch h/w page table register to the kernel-only page table,
+    // for when no process is running.
+    void switchkvm(void) {
+
+        /* change the CR3 register to the point to PDT setup for kernel     */
+        lcr3(V2P(kpgdir));   // switch to the kernel page table
+
+    }
+```
+
+
+### SEGINIT FUNCTION (UPDATING THE GDT)
+
+* The segmentation which is was set up for xv6 before loading the kernel into
+  RAM, which is effectively bypassed using the entries in Global Descripter Table.
+  Now there is again initialization of the segmentation table done by the kernel.
+
+    ```c
+        seginit();       // segment descriptors
+    ```
+
+* **seginit()** function updates the global descripter table (GDT) by adding 
+  two more additional values in the table, which corresponds to the process
+  address space segments. 
+    
+    ```c
+        // Set up CPU's kernel segment descriptors.
+        // Run once on entry on each CPU.
+
+        void seginit(void) {
+
+          struct cpu *c;
+        
+          // Map "logical" addresses to virtual addresses using identity map.
+          // Cannot share a CODE descriptor for both kernel and user
+          // because it would have to have DPL_USR, but the CPU forbids
+          // an interrupt from CPL=0 to DPL=3.
+          c = &cpus[cpuid()];
+
+          c->gdt[SEG_KCODE] = SEG(STA_X|STA_R, 0, 0xffffffff, 0);
+          c->gdt[SEG_KDATA] = SEG(STA_W, 0, 0xffffffff, 0);
+          c->gdt[SEG_UCODE] = SEG(STA_X|STA_R, 0, 0xffffffff, DPL_USER);
+          c->gdt[SEG_UDATA] = SEG(STA_W, 0, 0xffffffff, DPL_USER);
+
+          /* update the GDT resgister pointed memory location */
+          lgdt(c->gdt, sizeof(c->gdt));
+        }
+    ```
+    
+    + Note the only difference between the first two and last two values is
+      about the permissions. The process for execution must have DPL\_USER
+      level premission or the priviledge level specific to user processes.
+    
+    + However in both the cases the logical address and linear address both 
+      are same, segmentation is still effectively bypassed for both the
+      processes and the kernel as well.
+    
+    + GDT register is maintained per CPU, thus there is function call to
+      **cpuid()** which returns the current CPU index in the CPU array. Thus
+      the segmentation for each CPU would different.
+
+    + **From now GDT is never changed !!**. The page tables setup can still be
+      updated with new entires but not the GDT.
+
+
 
