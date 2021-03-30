@@ -1,4 +1,4 @@
-# xv6 KERNEL INIT FUNCTIONS
+# xv6 KERNEL ENTRY function (entrying to kernel code)
 
 * The bootmain function after loading the xv6 kernel at location 0x10000 in 
   RAM passes the control to the entry/start function which specified in the ELF 

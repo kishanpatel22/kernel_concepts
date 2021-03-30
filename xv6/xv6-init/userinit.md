@@ -17,6 +17,7 @@
 
 * Ensure that the processes returns and starts in the call to **exec**.
   In this case exec calls looks something this 
+
     ```c
         exec("/init", NULL);
     ```
@@ -486,5 +487,3 @@
                                                                             (exec system call)
         main() -> mpmain() -> schedular() -> switch -> forkret() -> initcode -----------------> init
     ```
-
-    
