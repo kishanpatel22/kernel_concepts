@@ -49,7 +49,6 @@
         }
     ```
 
-
 ### bget
 
 * The function will **get struct buffer cache for given paritcular block number
@@ -162,4 +161,5 @@
 
 * Note the data is still there however the node is moved at the head of the 
   doubly link list.
+
 
