@@ -128,14 +128,14 @@
 
 ### begin\_op    
    
-* The function is called before any transaction with the actaul file system data.
+* The function is called before any transaction with the actual file system data.
 
     ```c
         // called at the start of each FS system call.
         void begin_op(void);
     ```
 
-* There is infinite loop, which handles conditions like, it the **logs are
+* There is infinite loop, which handles conditions like, if the **logs are
   currently been commited** i.e. written out on the file sytem disk. Also if
   **there are many system calls for modifying data on disk**, in such cases it 
   simply **makes the process sleep**.
@@ -350,3 +350,4 @@
             brelse(dbuf);
         }   
     ```
+
